@@ -26,6 +26,7 @@ The class distribution of protein surfaces in the training set and test set for 
 The electrostatic potential was calculated using the Treecode-Accelerated Boundary Integral Poisson-Boltzmann solver, implemented in APBS (Geng, Krasny, 2013). The surface models were generated using NanoShaper.
 
 To download the datasets, please visit the official SHREC2025 website:https://shrec2025.drugdesign.fr/
+
 ### Training
 ```
 python train_classification.py
