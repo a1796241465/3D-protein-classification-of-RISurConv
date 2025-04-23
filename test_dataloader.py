@@ -39,13 +39,13 @@ class ProteinTestDataset(Dataset):
         features = np.hstack([points, potentials, normal_pots])
         features[:, :3] = self._normalize_coords(features[:, :3])
 
-        # 降采样（FPS或随机）
+        # 降采样
         if self.args.use_uniform_sample:
             features = self.farthest_point_sample(features, self.args.num_point)
         else:
             features = features[:self.args.num_point]
 
-        # 添加法向量（与训练集保持一致）
+        # 添加法向量
         if self.args.use_normals:
             if 'Normals' in mesh.array_names:
                 normals = mesh['Normals'][:self.args.num_point]
@@ -53,19 +53,19 @@ class ProteinTestDataset(Dataset):
                 normals = self._estimate_normals(features[:, :3])
             features = np.hstack([features, normals])
 
-        return torch.from_numpy(features).float()  # 无标签
+        return torch.from_numpy(features).float() 
 
     def _normalize_coords(self, coords):
-        """归一化坐标到单位球内（与训练集一致）"""
+        """归一化坐标到单位球内"""
         centroid = np.mean(coords, axis=0)
         coords -= centroid
         scale = np.max(np.sqrt(np.sum(coords ** 2, axis=1)))
         return coords / scale
 
     def farthest_point_sample(self, points, npoint):
-        """最远点采样（与训练集一致）"""
+        """最远点采样"""
         N, D = points.shape
-        xyz = points[:, :3]  # 仅基于坐标采样
+        xyz = points[:, :3]  
         centroids = np.zeros((npoint,))
         distance = np.ones((N,)) * 1e10
         farthest = np.random.randint(0, N)
@@ -81,7 +81,7 @@ class ProteinTestDataset(Dataset):
         return points[centroids.astype(np.int32)]
 
     def _estimate_normals(self, points, k=32):
-        """PCA估计法向量（与训练集一致）"""
+        """PCA估计法向量"""
         from sklearn.neighbors import NearestNeighbors
         knn = NearestNeighbors(n_neighbors=k).fit(points)
         _, indices = knn.kneighbors(points)
@@ -91,7 +91,6 @@ class ProteinTestDataset(Dataset):
             neighbors = points[indices[i]]
             cov = np.cov(neighbors.T)
             _, _, v = np.linalg.svd(cov)
-            normals[i] = v[2]  # 最小特征值对应的向量
+            normals[i] = v[2]  
 
         return normals
-
