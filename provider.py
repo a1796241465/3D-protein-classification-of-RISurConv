@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 def normalize_data(batch_data):
     """ Normalize the batch data, use coordinates of the block centered at origin,
@@ -291,6 +292,8 @@ def random_point_dropout(batch_pc, max_dropout_ratio=0.875):
         if len(drop_idx)>0:
             batch_pc[b,drop_idx,:] = batch_pc[b,0,:] # set to the first point
     return batch_pc
+
+
 
 
 
