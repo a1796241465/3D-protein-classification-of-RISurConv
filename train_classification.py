@@ -1,134 +1,218 @@
 import os
-import numpy as np
+import sys
+import csv
 import torch
+import numpy as np
+import datetime
+import logging
 import pandas as pd
 import pyvista as pv
-from torch.utils.data import Dataset
+import importlib
+import shutil
+import argparse
+from pathlib import Path
 from tqdm import tqdm
-import re
+from torch.utils.data import Dataset
+
+from test_dataloader import ProteinTestDataset
+from train_dataloader import ProteinTrainDataset
+import provider
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = BASE_DIR
+sys.path.append(ROOT_DIR)
+sys.path.append(os.path.join(ROOT_DIR, 'models'))
 
 
-class ProteinTrainDataset(Dataset):
-    def __init__(self, vtk_dir, csv_path, args):
-        """
-        Args:
-            vtk_dir: 包含VTK文件的目录（如 `train_vtk/`）
-            csv_path: 包含 `protein_id` 和 `class_id` 的CSV文件路径
-            args: 必须包含 num_point, use_normals, use_uniform_sample
-        """
-        self.vtk_dir = vtk_dir
-        self.args = args
+def parse_args():
+    '''PARAMETERS'''
+    parser = argparse.ArgumentParser('training')
+    parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
+    parser.add_argument('--gpu', type=str, default='0,1,2,3', help='specify gpu device')  
+    parser.add_argument('--batch_size', type=int, default=512,
+                        help='batch size in training')  
+    parser.add_argument('--model', default='risurconv_cls', help='model name')
+    parser.add_argument('--num_category', type=int, default=97, help='number of classes')
+    parser.add_argument('--epoch', default=450, type=int, help='number of epoch in training') 
+    parser.add_argument('--learning_rate', default=0.001, type=float, help='learning rate in training')
+    parser.add_argument('--num_point', type=int, default=1024, help='Point Number')
+    parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer for training')
+    parser.add_argument('--log_dir', type=str, default=None, help='experiment root')
+    parser.add_argument('--decay_rate', type=float, default=1e-3, help='decay rate')
+    parser.add_argument('--use_normals', action='store_true', default=False, help='use normals')
+    parser.add_argument('--process_data', action='store_true', default=True, help='save data offline')
+    parser.add_argument('--use_uniform_sample', action='store_true', default=True, help='use uniform sampiling')
+    parser.add_argument('--vtk_dir_train', type=str, required=False, help='vtk_root/train/', default='vtk_root/train/')
+    parser.add_argument('--vtk_dir_test', type=str, required=False, help='vtk_root/test/', default='vtk_root/test/')
+    parser.add_argument('--csv_path_train', type=str, required=False, help='train_set.csv', default='train_set.csv')
+    parser.add_argument('--csv_path_test', type=str, required=False, help='test_set.csv', default='test_set.csv')
+    parser.add_argument('--pretrain_weight', type=str, default=None, help='pretrained weight path')
+    return parser.parse_args()
 
-        # 从CSV加载标签映射 {protein_id: class_id}
-        df = pd.read_csv(csv_path)
-        self.label_map = dict(zip(df['protein_id'], df['class_id']))
 
-        # 获取所有VTK文件并匹配标签
-        self.files = []
-        for file in os.listdir(vtk_dir):
-            if file.endswith('.vtk'):
-                protein_id = file.replace('.vtk', '')  # 获取文件名，去掉扩展名
+def test(model, loader, num_class=97):
+    mean_correct = []
+    model.eval()
+    res = []
+    for batch in tqdm(loader, total=len(loader)):
+        points = batch[0]
+        if torch.cuda.is_available():
+            points = points.cuda()
 
-                # 分割文件名各部分
-                parts = re.split(r'[_:]', protein_id)
-                if len(parts) >= 0:  # 确保有足够的部分
-                    # 重组文件名：第一部分_第二部分:第三部分:第四部分_第五部分...
-                    protein_id_csv_format = f"{parts[0]}_{parts[1]}:{parts[2]}:{parts[3]}_{'_'.join(parts[4:])}"
-                else:
-                    print(f"Warning: Unexpected filename format {protein_id}, skipping")
-                    continue
+        points = points.unsqueeze(0)
+        pred = model(points)
+        pred_choice = torch.argmax(pred[0], dim=1)
+        pred_choice = pred_choice.item()
+        print('pred_choice======', pred_choice)
+        res.append(pred_choice)
+    print('预测标签：')
+    print(res)
+    try:
+        with open('res/output.csv', 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(['label'])  
+            for item in res:
+                writer.writerow([item])
+        print("写入成功！")
+    except Exception as e:
+        print(f"写入失败: {e}")
 
-                
-                if protein_id_csv_format in self.label_map:
-                    self.files.append((file, self.label_map[protein_id_csv_format]))
-                else:
-                    print(f"Warning: {protein_id_csv_format} not found in CSV, skipping file {file}")
 
-    def __len__(self):
-        return len(self.files)
+def main(args):
+    def log_string(str):
+        logger.info(str)
+        print(str)
 
-    def __getitem__(self, idx):
-        file, label = self.files[idx]
-        mesh = pv.read(os.path.join(self.vtk_dir, file))
+    '''HYPER PARAMETER'''
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
-        # 提取点云和属性
-        points = mesh.points.astype(np.float32)  # [N, 3]
+    '''CREATE DIR'''
+    timestr = str(datetime.datetime.now().strftime('%Y-%m-%d_%H-%M'))
+    exp_dir = Path('./log/')
+    exp_dir.mkdir(exist_ok=True)
+    exp_dir = exp_dir.joinpath('protein_classification')
+    exp_dir.mkdir(exist_ok=True)
+    if args.log_dir is None:
+        exp_dir = exp_dir.joinpath(timestr)
+    else:
+        exp_dir = exp_dir.joinpath(args.log_dir)
+    exp_dir.mkdir(exist_ok=True)
+    checkpoints_dir = exp_dir.joinpath('checkpoints/')
+    checkpoints_dir.mkdir(exist_ok=True)
+    log_dir = exp_dir.joinpath('logs/')
+    log_dir.mkdir(exist_ok=True)
 
-        potentials = mesh['Potential'].reshape(-1, 1).astype(np.float32)  # [N, 1]
-        normal_pots = mesh['NormalPotential'].reshape(-1, 1).astype(np.float32)  # [N, 1]
+    '''LOG'''
+    logger = logging.getLogger("Model")
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler = logging.FileHandler('%s/%s.txt' % (log_dir, args.model))
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    log_string('PARAMETER ...')
+    log_string(args)
 
-        # 拼接特征 [x,y,z, potential, normal_potential] -> [N, 5]
-        features = np.hstack([points, potentials, normal_pots])
-        features[:, :3] = self._normalize_coords(features[:, :3])  
+    '''DATA LOADING'''
+    log_string('Load dataset ...')
 
-        # 降采样
-        if self.args.use_uniform_sample:
-            features = self.farthest_point_sample(features, self.args.num_point)
-        else:
-            features = features[:self.args.num_point]
+  
+    train_dataset = ProteinTrainDataset(
+        vtk_dir=args.vtk_dir_train,
+        csv_path=args.csv_path_train,
+        args=args
+    )
 
-        # 添加法向量
-        if self.args.use_normals:
-            if 'normals' in mesh.array_names:
-                normals = mesh['Normals'][:self.args.num_point]  
-            else:
-                # PCA估计法向量
-                normals = self._estimate_normals(features[:, :3])
-            features = np.hstack([features, normals])  # [N, 8]
+   
+    test_dataset = ProteinTestDataset(
+        vtk_dir=args.vtk_dir_test,
+        csv_path=args.csv_path_test,
+        args=args
+    )
 
-        return torch.from_numpy(features).float(), torch.tensor(label)
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=10,
+        drop_last=True
+    )
 
-    def _normalize_coords(self, coords):
-        """归一化坐标到单位球内"""
-        centroid = np.mean(coords, axis=0)
-        coords -= centroid
-        scale = np.max(np.sqrt(np.sum(coords ** 2, axis=1)))
-        return coords / scale
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=10
+    )
+    # ---- class_weights ----
+    label_list = []
+    for _, label in train_loader:
+        label_list.append(label)
+    all_labels = torch.cat(label_list).cpu().numpy()
 
-    def farthest_point_sample(self, points, npoint):
-        """
-        最远点采样 (FPS)
-        Args:
-            points: [N, D] 输入点云（仅使用前3维坐标进行采样）
-            npoint: 目标点数
-        Returns:
-            sampled_points: [npoint, D] 采样后的点云
-        """
-        N, D = points.shape
-        xyz = points[:, :3]  # 仅基于坐标采样
-        centroids = np.zeros((npoint,))
-        distance = np.ones((N,)) * 1e10
-        farthest = np.random.randint(0, N)
+    class_sample_count = np.array([(all_labels == t).sum() for t in range(args.num_category)])
+    class_weights = 1.0 / class_sample_count
+    class_weights = class_weights / class_weights.sum()
+    class_weights_tensor = torch.FloatTensor(class_weights)
 
-        for i in range(npoint):
-            centroids[i] = farthest
-            centroid = xyz[farthest, :]
-            dist = np.sum((xyz - centroid) ** 2, axis=1)
-            mask = dist < distance
-            distance[mask] = dist[mask]
-            farthest = np.argmax(distance)
+    if not args.use_cpu:
+        class_weights_tensor = class_weights_tensor.cuda()
 
-        sampled_points = points[centroids.astype(np.int32)]
-        return sampled_points
+    '''MODEL LOADING'''
+    model = importlib.import_module(args.model)
+    classifier = model.get_model(args.num_category, normal_channel=args.use_normals)
+    criterion = model.get_loss(weight=class_weights_tensor)
 
-    def _estimate_normals(self, points, k=32):
-        """
-        通过PCA估计法向量
-        Args:
-            points: [N, 3] 点云坐标
-            k: KNN邻居数
-        Returns:
-            normals: [N, 3] 估计的法向量
-        """
-        from sklearn.neighbors import NearestNeighbors
-        knn = NearestNeighbors(n_neighbors=k).fit(points)
-        _, indices = knn.kneighbors(points)
 
-        normals = np.zeros_like(points)
-        for i in range(len(points)):
-            neighbors = points[indices[i]]
-            cov = np.cov(neighbors.T)
-            _, _, v = np.linalg.svd(cov)
-            normals[i] = v[2]  # 最小特征值对应的向量
 
-        return normals
+    if not args.use_cpu:
+        classifier = classifier.cuda()
+        criterion = criterion.cuda()
+        if torch.cuda.device_count() > 1:  
+            print(f"使用 {torch.cuda.device_count()} 块GPU (DataParallel)")
+            classifier = torch.nn.DataParallel(classifier)
+
+    '''OPTIMIZER'''
+    optimizer = torch.optim.Adam(
+        classifier.module.parameters() if hasattr(classifier, 'module') else classifier.parameters(),  
+        lr=args.learning_rate,
+        betas=(0.9, 0.999),
+        weight_decay=args.decay_rate
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.7)
+
+    '''TRAINING'''
+    best_acc = 0.0
+    for epoch in range(args.epoch):
+        classifier.train()
+        for batch in tqdm(train_loader, desc=f'Epoch {epoch}'):
+            points, target = batch
+            if not args.use_cpu:
+                points, target = points.cuda(), target.cuda()
+
+            # 数据增强
+            points = points.cpu().numpy()
+            points = provider.random_point_dropout(points)
+            points[:, :, 0:3] = provider.random_scale_point_cloud(points[:, :, 0:3])
+            points[:, :, 0:3] = provider.shift_point_cloud(points[:, :, 0:3])
+            points = torch.Tensor(points).cuda()
+
+            optimizer.zero_grad()
+            pred = classifier(points)
+            loss = criterion(pred, target)
+            loss.backward()
+            optimizer.step()
+
+        scheduler.step()
+
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': classifier.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict()
+        }, 'model_save/best_model.pth')
+        test(classifier, test_loader, args.num_category)
+       
+
+if __name__ == '__main__':
+    args = parse_args()
+    main(args)
