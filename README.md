@@ -1,5 +1,4 @@
-# 3D-protein-classification-of-RISurConv
-
+# RISurProtNet
 
 ## Installation
 The environment required to run this project can be set up using the provided environment.yml file.  
