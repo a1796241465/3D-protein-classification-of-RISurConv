@@ -1,4 +1,4 @@
-# RISurProtNet
+# RISurProtNet:RISurConv-based Protein Network
 
 ## Installation
 The environment required to run this project can be set up using the provided environment.yml file.  
