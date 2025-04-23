@@ -22,7 +22,6 @@ class get_model(nn.Module):
             out_channel=32,
             group_all=False
         )
-        # 其他层保持不变...
         self.sc1 = RISurConvSetAbstraction(npoint=256 * n, radius=0.16, nsample=16, in_channel=32, out_channel=64,
                                            group_all=False)
         self.sc2 = RISurConvSetAbstraction(npoint=128 * n, radius=0.24, nsample=32, in_channel=64, out_channel=128,
@@ -80,11 +79,13 @@ class get_model(nn.Module):
         return x, l4_points
 
 class get_loss(nn.Module):
-    def __init__(self):
-            super(get_loss, self).__init__()
+    def __init__(self, weight=None):
+        super(get_loss, self).__init__()
+        self.weight = weight
 
     def forward(self, pred, target):
-            if isinstance(pred, tuple):  # 如果 pred 是元组，只取分类 logits
-                pred = pred[0]
-            total_loss = F.nll_loss(pred, target)
-            return total_loss
+        if isinstance(pred, tuple):  # 如果 pred 是元组，只取分类 logits
+            pred = pred[0]
+        total_loss = F.nll_loss(pred, target, weight=self.weight)
+        return total_loss
+
