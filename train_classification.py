@@ -28,17 +28,17 @@ def parse_args():
     '''PARAMETERS'''
     parser = argparse.ArgumentParser('training')
     parser.add_argument('--use_cpu', action='store_true', default=False, help='use cpu mode')
-    parser.add_argument('--gpu', type=str, default='0,1,2,3', help='specify gpu device')  
-    parser.add_argument('--batch_size', type=int, default=512,
-                        help='batch size in training')  
+    parser.add_argument('--gpu', type=str, default='0,1,2,3', help='specify gpu device')  # 多个gpu这里改
+    parser.add_argument('--batch_size', type=int, default=1024,
+                        help='batch size in training')  # 24G gpu  batch最大256，根据个数设置batch值256*n
     parser.add_argument('--model', default='risurconv_cls', help='model name')
     parser.add_argument('--num_category', type=int, default=97, help='number of classes')
-    parser.add_argument('--epoch', default=450, type=int, help='number of epoch in training') 
+    parser.add_argument('--epoch', default=450, type=int, help='number of epoch in training')  # 迭代次数
     parser.add_argument('--learning_rate', default=0.001, type=float, help='learning rate in training')
     parser.add_argument('--num_point', type=int, default=1024, help='Point Number')
     parser.add_argument('--optimizer', type=str, default='Adam', help='optimizer for training')
     parser.add_argument('--log_dir', type=str, default=None, help='experiment root')
-    parser.add_argument('--decay_rate', type=float, default=1e-3, help='decay rate')
+    parser.add_argument('--decay_rate', type=float, default=1e-4, help='decay rate')
     parser.add_argument('--use_normals', action='store_true', default=False, help='use normals')
     parser.add_argument('--process_data', action='store_true', default=True, help='save data offline')
     parser.add_argument('--use_uniform_sample', action='store_true', default=True, help='use uniform sampiling')
@@ -116,17 +116,17 @@ def main(args):
     '''DATA LOADING'''
     log_string('Load dataset ...')
 
-  
+   
     train_dataset = ProteinTrainDataset(
-        vtk_dir=args.vtk_dir_train,
-        csv_path=args.csv_path_train,
+        vtk_dir=args.vtk_dir_train,  
+        csv_path=args.csv_path_train,  
         args=args
     )
 
-   
-    test_dataset = ProteinTestDataset(
-        vtk_dir=args.vtk_dir_test,
-        csv_path=args.csv_path_test,
+    
+    test_dataset = ProteinTestDataset(  
+        vtk_dir=args.vtk_dir_test,  
+        csv_path=args.csv_path_test,  
         args=args
     )
 
@@ -141,36 +141,20 @@ def main(args):
     test_loader = torch.utils.data.DataLoader(
         test_dataset,
         batch_size=1,
-        shuffle=False,
+        shuffle=False,  
         num_workers=10
     )
-    # ---- class_weights ----
-    label_list = []
-    for _, label in train_loader:
-        label_list.append(label)
-    all_labels = torch.cat(label_list).cpu().numpy()
-
-    class_sample_count = np.array([(all_labels == t).sum() for t in range(args.num_category)])
-    class_weights = 1.0 / class_sample_count
-    class_weights = class_weights / class_weights.sum()
-    class_weights_tensor = torch.FloatTensor(class_weights)
-
-    if not args.use_cpu:
-        class_weights_tensor = class_weights_tensor.cuda()
-
     '''MODEL LOADING'''
     model = importlib.import_module(args.model)
     classifier = model.get_model(args.num_category, normal_channel=args.use_normals)
-    criterion = model.get_loss(weight=class_weights_tensor)
-
-
+    criterion = model.get_loss()
 
     if not args.use_cpu:
         classifier = classifier.cuda()
         criterion = criterion.cuda()
         if torch.cuda.device_count() > 1:  
             print(f"使用 {torch.cuda.device_count()} 块GPU (DataParallel)")
-            classifier = torch.nn.DataParallel(classifier)
+            classifier = torch.nn.DataParallel(classifier) 
 
     '''OPTIMIZER'''
     optimizer = torch.optim.Adam(
@@ -212,6 +196,7 @@ def main(args):
         }, 'model_save/best_model.pth')
         test(classifier, test_loader, args.num_category)
        
+
 
 if __name__ == '__main__':
     args = parse_args()
