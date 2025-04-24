@@ -18,29 +18,25 @@ class ProteinTrainDataset(Dataset):
         """
         self.vtk_dir = vtk_dir
         self.args = args
-
-        # 从CSV加载标签映射 {protein_id: class_id}
+       {protein_id: class_id}
         df = pd.read_csv(csv_path)
         self.label_map = dict(zip(df['protein_id'], df['class_id']))
-
-        # 获取所有VTK文件并匹配标签
         self.files = []
         for file in os.listdir(vtk_dir):
             if file.endswith('.vtk'):
-                protein_id = file.replace('.vtk', '')  
-
-                # 分割文件名各部分
+                protein_id = file.replace('.vtk', '') 
                 parts = re.split(r'[_:]', protein_id)
                 if len(parts) >= 0: 
                     protein_id_csv_format = f"{parts[0]}_{parts[1]}:{parts[2]}:{parts[3]}_{'_'.join(parts[4:])}"
                 else:
                     print(f"Warning: Unexpected filename format {protein_id}, skipping")
                     continue
+
+               
                 if protein_id_csv_format in self.label_map:
                     self.files.append((file, self.label_map[protein_id_csv_format]))
                 else:
                     print(f"Warning: {protein_id_csv_format} not found in CSV, skipping file {file}")
-
     def __len__(self):
         return len(self.files)
 
@@ -48,30 +44,31 @@ class ProteinTrainDataset(Dataset):
         file, label = self.files[idx]
         mesh = pv.read(os.path.join(self.vtk_dir, file))
 
-        # 提取点云和属性
+       
         points = mesh.points.astype(np.float32)  # [N, 3]
-        potentials = mesh['Potential'].reshape(-1, 1).astype(np.float32)  # [N, 1]
-        normal_pots = mesh['NormalPotential'].reshape(-1, 1).astype(np.float32)  # [N, 1]
-
-        # 拼接特征 [x,y,z, potential, normal_potential] -> [N, 5]
+        potentials = mesh['Potential'].reshape(-1, 1).astype(np.float32) 
+        normal_pots = mesh['NormalPotential'].reshape(-1, 1).astype(np.float32) 
+        [x,y,z, potential, normal_potential] -> [N, 5]
         features = np.hstack([points, potentials, normal_pots])
-        features[:, :3] = self._normalize_coords(features[:, :3])  # 归一化坐标
+        # print('features=====>',str(features.shape))
+        features[:, :3] = self._normalize_coords(features[:, :3])  
 
-        # 降采样
+       
         if self.args.use_uniform_sample:
             features = self.farthest_point_sample(features, self.args.num_point)
         else:
             features = features[:self.args.num_point]
 
-        # 添加法向量
+        
         if self.args.use_normals:
             if 'normals' in mesh.array_names:
                 normals = mesh['Normals'][:self.args.num_point]  
             else:
-                # PCA估计法向量
+                
                 normals = self._estimate_normals(features[:, :3])
             features = np.hstack([features, normals])  # [N, 8]
-
+            
+            # print('features------->',str(features.shape))
         return torch.from_numpy(features).float(), torch.tensor(label)
 
     def _normalize_coords(self, coords):
@@ -85,13 +82,13 @@ class ProteinTrainDataset(Dataset):
         """
         最远点采样 (FPS)
         Args:
-            points: [N, D] 输入点云
+            points: [N, D] 输入点云（仅使用前3维坐标进行采样）
             npoint: 目标点数
         Returns:
             sampled_points: [npoint, D] 采样后的点云
         """
         N, D = points.shape
-        xyz = points[:, :3]  # 仅基于坐标采样
+        xyz = points[:, :3]  
         centroids = np.zeros((npoint,))
         distance = np.ones((N,)) * 1e10
         farthest = np.random.randint(0, N)
@@ -125,6 +122,8 @@ class ProteinTrainDataset(Dataset):
             neighbors = points[indices[i]]
             cov = np.cov(neighbors.T)
             _, _, v = np.linalg.svd(cov)
-            normals[i] = v[2] 
+            normals[i] = v[2]  
 
         return normals
+
+
