@@ -18,9 +18,7 @@ class ProteinTestDataset(Dataset):
         """
         self.vtk_dir = vtk_dir
         self.args = args
-
-        # 加载匿名化ID列表
-        df = pd.read_csv(csv_path)  # 使用传入的csv_path参数
+        df = pd.read_csv(csv_path)  
         self.anon_ids = df['anonymised_protein_id'].tolist()  # ["0.vtk", "1.vtk", ...]
 
     def __len__(self):
@@ -30,22 +28,22 @@ class ProteinTestDataset(Dataset):
         file = self.anon_ids[idx]
         mesh = pv.read(os.path.join(self.vtk_dir, file))
 
-        # 提取点云和属性
+        
         points = mesh.points.astype(np.float32)
         potentials = mesh['Potential'].reshape(-1, 1).astype(np.float32)
         normal_pots = mesh['NormalPotential'].reshape(-1, 1).astype(np.float32)
 
-        # 拼接基础特征 [x,y,z, potential, normal_potential]
+        [x,y,z, potential, normal_potential]
         features = np.hstack([points, potentials, normal_pots])
         features[:, :3] = self._normalize_coords(features[:, :3])
 
-        # 降采样
+        
         if self.args.use_uniform_sample:
             features = self.farthest_point_sample(features, self.args.num_point)
         else:
             features = features[:self.args.num_point]
 
-        # 添加法向量
+        
         if self.args.use_normals:
             if 'Normals' in mesh.array_names:
                 normals = mesh['Normals'][:self.args.num_point]
@@ -65,7 +63,7 @@ class ProteinTestDataset(Dataset):
     def farthest_point_sample(self, points, npoint):
         """最远点采样"""
         N, D = points.shape
-        xyz = points[:, :3]  
+        xyz = points[:, :3]  # 仅基于坐标采样
         centroids = np.zeros((npoint,))
         distance = np.ones((N,)) * 1e10
         farthest = np.random.randint(0, N)
@@ -94,3 +92,4 @@ class ProteinTestDataset(Dataset):
             normals[i] = v[2]  
 
         return normals
+
